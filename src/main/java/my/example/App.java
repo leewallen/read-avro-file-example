@@ -9,35 +9,114 @@ import org.apache.avro.io.DatumReader;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.io.File;
 import java.io.IOException;
-import java.net.URISyntaxException;
-import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.regex.Pattern;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 public class App {
 
     private static final Logger log = LoggerFactory.getLogger(App.class);
-    public static void main(String[] args) throws URISyntaxException, IOException {
-        DatumReader<Lights> lightsDatumReader = new SpecificDatumReader<>(Lights.class);
-        File file = getFileFromResource("./lights.avro");
+    public static void main(String[] args) throws IOException {
+        Pattern pattern = Pattern.compile(".*avro");
 
-        try (DataFileReader<Lights> dataFileReader = new DataFileReader<>(file, lightsDatumReader)) {
+        final Collection<String> fileNames = App.getResources(pattern);
+
+        DatumReader<Lights> lightsDatumReader = new SpecificDatumReader<>(Lights.class);
+        for (String fn : fileNames) {
+            File file = new File(fn);
+            log.info("File : {} : {}", file.getName(), getAvroDataAsString(lightsDatumReader, file));
+        }
+    }
+
+    private static String getAvroDataAsString(DatumReader<Lights> lightsDatumReader,
+                                              File file) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (DataFileReader<Lights> dataFileReader = new DataFileReader<>(file,
+                lightsDatumReader)) {
             Lights lights = null;
             while (dataFileReader.hasNext()) {
                 lights = dataFileReader.next(lights);
-                log.info("{}", lights);
+                sb.append(lights);
             }
         }
+        return sb.toString();
     }
-
-    private static File getFileFromResource(String fileName) throws URISyntaxException {
-        ClassLoader classLoader = App.class.getClassLoader();
-        URL resource = classLoader.getResource(fileName);
-        if (resource == null) {
-            throw new IllegalArgumentException("file not found! " + fileName);
-        } else {
-            return new File(resource.toURI());
+    
+    public static Collection<String> getResources(
+            final Pattern pattern){
+        final ArrayList<String> fileList = new ArrayList<>();
+        final String classPath = System.getProperty("java.class.path", ".");
+        final String[] classPathElements = classPath.split(System.getProperty("path.separator"));
+        for(final String element : classPathElements){
+            fileList.addAll(getResources(element, pattern));
         }
+        return fileList;
     }
 
+    private static Collection<String> getResources(
+            final String element,
+            final Pattern pattern){
+        final ArrayList<String> fileList = new ArrayList<>();
+        final File file = new File(element);
+        if(file.isDirectory()){
+            fileList.addAll(getResourcesFromDirectory(file, pattern));
+        } else{
+            fileList.addAll(getResourcesFromJarFile(file, pattern));
+        }
+        return fileList;
+    }
+
+    private static Collection<String> getResourcesFromJarFile(final File file, final Pattern pattern) throws Error {
+        final ArrayList<String> fileList = new ArrayList<>();
+        ZipFile zf;
+        try{
+            zf = new ZipFile(file);
+        } catch(IOException e){
+            throw new Error(e);
+        }
+        final var entry = zf.entries();
+        while(entry.hasMoreElements()){
+            final ZipEntry zipEntry = entry.nextElement();
+            final String fileName = zipEntry.getName();
+            if (pattern.matcher(fileName).matches()) {
+                fileList.add(fileName);
+            }
+        }
+        try {
+            zf.close();
+        } catch(final IOException ioException){
+            throw new Error(ioException);
+        }
+        return fileList;
+    }
+
+    private static Collection<String> getResourcesFromDirectory(
+            final File directory,
+            final Pattern pattern){
+        final ArrayList<String> fileNames = new ArrayList<>();
+        final File[] fileList = directory.listFiles();
+        if (fileList != null) {
+            for (final File file : fileList) {
+                if (file.isDirectory()) {
+                    fileNames.addAll(getResourcesFromDirectory(file, pattern));
+                } else {
+                    try {
+                        final String fileName = file.getCanonicalPath();
+                        final boolean accept = pattern.matcher(fileName).matches();
+                        if (accept) {
+                            fileNames.add(fileName);
+                        }
+                    } catch (final IOException e) {
+                        throw new Error(e);
+                    }
+                }
+            }
+        }
+        return fileNames;
+    }
 }
